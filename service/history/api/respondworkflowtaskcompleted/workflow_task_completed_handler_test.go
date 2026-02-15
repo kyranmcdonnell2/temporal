@@ -384,3 +384,63 @@ func mustMarshalAny(t *testing.T, pb proto.Message) *anypb.Any {
 	require.NoError(t, a.MarshalFrom(pb))
 	return &a
 }
+
+func TestFlushBatchedNotifyActivityTasks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("batches activities by control queue", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ms := historyi.NewMockMutableState(ctrl)
+
+		ms.EXPECT().AddNotifyActivityTasks(
+			[]int64{5, 6, 7},
+			"control-queue-1",
+			gomock.Any(),
+		).Return(nil).Times(1)
+
+		handler := &workflowTaskCompletedHandler{
+			mutableState: ms,
+			pendingActivityCancelsByControlQueue: map[string][]int64{
+				"control-queue-1": {5, 6, 7},
+			},
+		}
+
+		err := handler.flushBatchedNotifyActivityTasks()
+		require.NoError(t, err)
+	})
+
+	t.Run("creates separate tasks for different control queues", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ms := historyi.NewMockMutableState(ctrl)
+
+		ms.EXPECT().AddNotifyActivityTasks(
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+		).Return(nil).Times(2)
+
+		handler := &workflowTaskCompletedHandler{
+			mutableState: ms,
+			pendingActivityCancelsByControlQueue: map[string][]int64{
+				"control-queue-1": {5, 6},
+				"control-queue-2": {7, 8},
+			},
+		}
+
+		err := handler.flushBatchedNotifyActivityTasks()
+		require.NoError(t, err)
+	})
+
+	t.Run("does nothing when no pending cancels", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ms := historyi.NewMockMutableState(ctrl)
+
+		handler := &workflowTaskCompletedHandler{
+			mutableState:                         ms,
+			pendingActivityCancelsByControlQueue: nil,
+		}
+
+		err := handler.flushBatchedNotifyActivityTasks()
+		require.NoError(t, err)
+	})
+}
